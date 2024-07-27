@@ -4,6 +4,7 @@ const axios = require('axios');
 const colors = require('colors');
 const readline = require('readline');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const { DateTime } = require('luxon');
 
 class PokeyQuest {
     headers(token = '') {
@@ -198,6 +199,60 @@ class PokeyQuest {
         }
     }    
 
+    async getFarmInfo(token, proxy) {
+        const url = 'https://api.pokey.quest/pokedex/farm-info';
+    
+        try {
+            const response = await axios.get(url, {
+                headers: this.headers(token),
+                timeout: 5000,
+                httpsAgent: new HttpsProxyAgent(proxy)
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+    
+    async postFarm(token, proxy) {
+        const url = 'https://api.pokey.quest/pokedex/farm';
+    
+        try {
+            const response = await axios.post(url, {}, {
+                headers: this.headers(token),
+                timeout: 5000,
+                httpsAgent: new HttpsProxyAgent(proxy)
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+    
+    async handleFarming(token, proxy) {
+        const farmInfo = await this.getFarmInfo(token, proxy);
+        if (farmInfo && farmInfo.error_code === 'OK') {
+            const { next_farm_time } = farmInfo.data;
+            const currentTime = DateTime.now().toMillis();
+    
+            if (currentTime > next_farm_time) {
+                this.log(`Farming now...`);
+                const farmResponse = await this.postFarm(token, proxy);
+                if (farmResponse && farmResponse.error_code === 'OK') {
+                    this.log(`Farm thành công, GOLD nhận được: ${farmResponse.data.gold_reward.toString().white}`.green);
+                } else {
+                    this.log(`Farm không thành công: ${farmResponse ? farmResponse.error_code : 'No response data'}`.green);
+                }
+            } else {
+                this.log(`Thời gian farm tiếp theo: ${DateTime.fromMillis(next_farm_time).toLocaleString(DateTime.DATETIME_FULL).yellow}`.green);
+            }
+        } else {
+            this.log(`Failed to get farm info: ${farmInfo ? farmInfo.error_code : 'No response data'}`.red);
+        }
+    }
+
     askQuestion(query) {
         const rl = readline.createInterface({
             input: process.stdin,
@@ -246,44 +301,46 @@ class PokeyQuest {
 
                 let syncResponse = await this.postTapSync(token, proxy);
 
-                while (syncResponse && syncResponse.error_code === 'OK') {
-                    const syncData = syncResponse.data;
+                if (syncResponse && syncResponse.error_code === 'OK') {
+                    let syncData = syncResponse.data;
                     this.log(`Năng lượng còn: ${syncData.available_taps.toString().white}`.green);
                     this.log(`Balance: ${Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance)}`.cyan);
-                    if (hoinangcap) {
-                        await this.checkAndUpgrade(token, Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance), proxy);
+                    await this.handleFarming(token, proxy);
+        
+                    while (syncData.available_taps > 0) {
+                        if (syncData.available_taps < 50) {
+                            this.log(`Năng lượng thấp (${syncData.available_taps}), chuyển tài khoản khác...`.red);
+                            break;
                         }
-                    if (syncData.available_taps >= 50) {
+        
                         this.log(`Bắt đầu tap...`.white);
-                        const count = Math.floor(Math.random() * (50 - 30 + 1)) + 30;
+                        const count = Math.min(Math.floor(Math.random() * (50 - 30 + 1)) + 30, syncData.available_taps);
                         const tapResponse = await this.postTapTap(token, count, proxy);
-
+        
                         if (tapResponse && tapResponse.error_code === 'OK') {
-                            const tapData = tapResponse.data;
-                            this.log(`Năng lượng sau khi tap: ${tapData.available_taps.toString().white}`.green);
-                            this.log(`Balance sau khi tap: ${Math.floor(tapData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance)}`.cyan);
-
-                            if (tapData.dropped_cards.length > 0) {
+                            syncData = tapResponse.data;
+                            this.log(`Năng lượng sau khi tap: ${syncData.available_taps.toString().white}`.green);
+                            this.log(`Balance sau khi tap: ${Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance)}`.cyan);
+        
+                            if (syncData.dropped_cards.length > 0) {
                                 this.log(`Dropped Cards:`);
-                                tapData.dropped_cards.forEach(card => {
+                                syncData.dropped_cards.forEach(card => {
                                     console.log(`    - Name: ${card.name.yellow}, Rare: ${card.rare}, Level: ${card.level}`);
                                 });
                             } else {
                                 this.log(`No dropped cards.`);
                             }
-                            syncResponse = tapResponse;
                         } else {
                             this.log(`Tap không thành công: ${tapResponse ? tapResponse.error_code : 'No response data'}`);
                             break;
                         }
-                    } else {
-                        this.log(`Năng lượng thấp, chuyển tài khoản khác !`.red);
-                        break;
                     }
-                }
-
-                if (syncResponse && syncResponse.error_code !== 'OK') {
-                    this.log(`Lấy dữ liệu người dùng thất bại: ${syncResponse.error_code}`);
+        
+                    if (hoinangcap) {
+                        await this.checkAndUpgrade(token, Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance), proxy);
+                    }
+                } else {
+                    this.log(`Lấy dữ liệu người dùng thất bại: ${syncResponse ? syncResponse.error_code : 'No response data'}`);
                 }
             }
             await this.Countdown(300);
