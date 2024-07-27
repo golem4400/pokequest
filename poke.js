@@ -231,6 +231,112 @@ class PokeyQuest {
         }));
     }
 
+    async getCardList(token) {
+        const url = 'https://api.pokey.quest/pokedex/list';
+
+        try {
+            const response = await axios.get(url, {
+                headers: this.headers(token),
+                timeout: 5000
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+
+    async upgradeCard(token, cardId) {
+        const url = 'https://api.pokey.quest/pokedex/upgrade';
+        const payload = { card_id: cardId };
+
+        try {
+            const response = await axios.post(url, payload, {
+                headers: this.headers(token),
+                timeout: 5000
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+
+    async upgradeCards(token, balance, friend) {
+        const cardListResponse = await this.getCardList(token);
+
+        if (cardListResponse && cardListResponse.error_code === 'OK') {
+            const cards = cardListResponse.data.data;
+            for (let card of cards) {
+                if (card.amount >= card.amount_card && balance >= card.amount_gold && friend >= card.amount_friend) {
+                    this.log(`Đang nâng cấp thẻ ${card.name} có rare ${card.rare}...`.yellow);
+                    const upgradeResponse = await this.upgradeCard(token, card.id);
+
+                    if (upgradeResponse && upgradeResponse.error_code === 'OK') {
+                        this.log(`Nâng cấp thành công thẻ ${card.name} lên lv ${upgradeResponse.data.level}`.green);
+                        balance -= card.amount_gold;
+                        friend -= card.amount_friend;
+                    } else {
+                        this.log(`Nâng cấp không thành công thẻ ${card.name}: ${upgradeResponse ? upgradeResponse.error_code : 'No response data'}`.red);
+                    }
+                }
+            }
+        } else {
+            this.log(`Không thể lấy danh sách thẻ: ${cardListResponse ? cardListResponse.error_code : 'No response data'}`.red);
+        }
+    }
+
+    async getReferralList(token) {
+        const url = 'https://api.pokey.quest/referral/list';
+    
+        try {
+            const response = await axios.get(url, {
+                headers: this.headers(token),
+                timeout: 5000
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+    
+    async claimFriendCashback(token, referralId) {
+        const url = 'https://api.pokey.quest/referral/claim-friend';
+        const payload = { friend_id: referralId };
+    
+        try {
+            const response = await axios.post(url, payload, {
+                headers: this.headers(token),
+                timeout: 5000
+            });
+            return response.data;
+        } catch (error) {
+            this.log(`Error: ${error.message}`);
+            return null;
+        }
+    }
+    
+    async handleFriendCashback(token) {
+        const referralList = await this.getReferralList(token);
+    
+        if (referralList && referralList.error_code === 'OK' && Array.isArray(referralList.data.data)) {
+            for (let referral of referralList.data.data) {
+                if (referral.friend_cashback >= 1) {
+                    const claimResponse = await this.claimFriendCashback(token, referral.id);
+    
+                    if (claimResponse && claimResponse.error_code === 'OK') {
+                        this.log(`Claimed $FRIEND for referral: ${referral.username}`.green);
+                    } else {
+                        this.log(`Claim $FRIEND thất bại: ${referral.username}, ${claimResponse ? claimResponse.error_code : 'No response data'}`.red);
+                    }
+                }
+            }
+        } else {
+            this.log(`Không thể lấy danh sách bạn bè: ${referralList ? referralList.error_code : 'No response data'}`.red);
+        }
+    }
+
     async main() {
         const dataFile = path.join(__dirname, 'data.txt');
         const userData = fs.readFileSync(dataFile, 'utf8')
@@ -268,10 +374,12 @@ class PokeyQuest {
                     let syncData = syncResponse.data;
                     this.log(`Năng lượng còn: ${syncData.available_taps.toString().white}`.green);
                     this.log(`Balance: ${Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance)}`.cyan);
-
-
+                    this.log(`Balance FRIEND: ${Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'FRI').balance)}`.cyan);
                     await this.handleFarming(token);
-
+                    const balance = Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'GOL').balance);
+                    const friend = Math.floor(syncData.balance_coins.find(coin => coin.currency_symbol === 'FRI').balance);
+                    await this.handleFriendCashback(token);
+                    await this.upgradeCards(token, balance, friend);
                     while (syncData.available_taps > 0) {
                         if (syncData.available_taps < 50) {
                             this.log(`Năng lượng thấp (${syncData.available_taps}), chuyển tài khoản khác...`.red);
@@ -309,7 +417,7 @@ class PokeyQuest {
                 }
 
             }
-            await this.Countdown(300);
+            await this.Countdown(60);
         }
     }
 }
